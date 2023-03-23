@@ -3,6 +3,15 @@
 #include <Windows.h>
 #include <stdio.h>
 
+#define AFD_BIND 0
+#define AFD_CONNECT 1
+
+#define FSCTL_AFD_BASE FILE_DEVICE_NETWORK
+#define _AFD_CONTROL_CODE(Operation,Method) ((FSCTL_AFD_BASE)<<12 | (Operation<<2) | Method)
+
+#define IOCTL_AFD_BIND _AFD_CONTROL_CODE(AFD_BIND, METHOD_NEITHER)
+#define IOCTL_AFD_CONNECT _AFD_CONTROL_CODE(AFD_CONNECT, METHOD_NEITHER)
+
 struct NTSockets_SocketDataStruct
 {
 	HANDLE hSocket;
@@ -11,16 +20,15 @@ struct NTSockets_SocketDataStruct
 
 typedef struct NTSockets_SocketDataStruct NTSockets_SocketDataStruct;
 
-struct IO_STATUS_BLOCK
-{
-	union
-	{
-		DWORD Status;
+// See https://github.com/reactos/reactos/blob/master/sdk/include/psdk/winternl.h
+typedef struct _IO_STATUS_BLOCK {
+	union {
+		NTSTATUS Status;
 		PVOID Pointer;
 	};
 
-	DWORD* Information;
-};
+	ULONG_PTR Information;
+} IO_STATUS_BLOCK, * PIO_STATUS_BLOCK;
 
 struct UNICODE_STRING
 {
@@ -75,27 +83,15 @@ DWORD(WINAPI* NtDeviceIoControlFile)(HANDLE FileHandle, HANDLE Event, VOID* ApcR
 DWORD(WINAPI* NtCreateFile)(PHANDLE FileHandle, ACCESS_MASK DesiredAccess, struct OBJECT_ATTRIBUTES* ObjectAttributes, 
 	struct IO_STATUS_BLOCK* IoStatusBlock, LARGE_INTEGER* AllocationSize, ULONG FileAttributes, ULONG ShareAccess, ULONG CreateDisposition, ULONG CreateOptions, PVOID EaBuffer, ULONG EaLength);
 
-// DONT USE
-WORD NTSockets_Swap16BitByteOrder(WORD wValue)
-{
-	WORD wNewValue = 0;
 
-	// swap byte order - this assumes we are running on an x86-based chip
-	*(BYTE*)((DWORD)&wNewValue + 0) = *(BYTE*)((DWORD)&wValue + 1);
-	*(BYTE*)((DWORD)&wNewValue + 1) = *(BYTE*)((DWORD)&wValue + 0);
-
-	return wNewValue;
-}
-
-WORD
-my_htons(WORD x)
+WORD my_htons(WORD x)
 {
 	return _byteswap_ushort(x);
 }
 
 DWORD NTSockets_CreateTcpSocket(struct NTSockets_SocketDataStruct* pSocketData)
 {
-	struct IO_STATUS_BLOCK IoStatusBlock;
+	IO_STATUS_BLOCK IoStatusBlock;
 	HANDLE hEvent = NULL;
 	HANDLE hSocket = NULL;
 	struct OBJECT_ATTRIBUTES ObjectAttributes;
@@ -155,7 +151,7 @@ DWORD NTSockets_CreateTcpSocket(struct NTSockets_SocketDataStruct* pSocketData)
 
 DWORD NTSockets_SocketDriverMsg(NTSockets_SocketDataStruct* pSocketData, DWORD dwIoControlCode, BYTE* pData, DWORD dwLength, DWORD* pdwOutputInformation)
 {
-	struct IO_STATUS_BLOCK IoStatusBlock;
+	IO_STATUS_BLOCK IoStatusBlock;
 	DWORD dwStatus = 0;
 	BYTE bOutputBlock[0x10];
 
@@ -322,7 +318,7 @@ DWORD NTSockets_Connect(NTSockets_SocketDataStruct* pSocketData, char* pIP, WORD
 	NTSockets_BindData.SockAddr.sin_family = AF_INET;
 	NTSockets_BindData.SockAddr.sin_addr.s_addr = INADDR_ANY;
 	NTSockets_BindData.SockAddr.sin_port = 0;
-	if (NTSockets_SocketDriverMsg(pSocketData, 0x00012003, (BYTE*)&NTSockets_BindData, sizeof(NTSockets_BindData), NULL) != 0)
+	if (NTSockets_SocketDriverMsg(pSocketData, IOCTL_AFD_BIND, (BYTE*)&NTSockets_BindData, sizeof(NTSockets_BindData), NULL) != 0)
 	{
 		// error
 		return 1;
@@ -347,7 +343,7 @@ DWORD NTSockets_Connect(NTSockets_SocketDataStruct* pSocketData, char* pIP, WORD
 	NTSockets_ConnectData.SockAddr.sin_family = AF_INET;
 	NTSockets_ConnectData.SockAddr.sin_addr.s_addr = dwConnectAddr;
 	NTSockets_ConnectData.SockAddr.sin_port = wConnectPort;
-	if (NTSockets_SocketDriverMsg(pSocketData, 0x00012007, (BYTE*)&NTSockets_ConnectData, sizeof(NTSockets_ConnectData), NULL) != 0)
+	if (NTSockets_SocketDriverMsg(pSocketData, IOCTL_AFD_CONNECT, (BYTE*)&NTSockets_ConnectData, sizeof(NTSockets_ConnectData), NULL) != 0)
 	{
 		// error
 		return 1;
@@ -469,318 +465,8 @@ DWORD NTSockets_CloseSocket(NTSockets_SocketDataStruct* pSocketData)
 	return 0;
 }
 
-
-DWORD DownloadFile(char* pURL, BYTE** pOutput, DWORD* pdwOutputLength)
-{
-	char szProtocol[16];
-	char szHostName[256];
-	char szRequestHeader[2048];
-	char szResponseHeader[2048];
-	char* pStartOfHostName = NULL;
-	char* pEndOfHostName = NULL;
-	char* pRequestPath = NULL;
-	DWORD dwAddr = 0;
-	char* pHostNamePort = NULL;
-	DWORD dwPort = 0;
-	char szResolvedIP[32];
-	NTSockets_SocketDataStruct SocketData;
-	DWORD dwFoundEndOfResponseHeader = 0;
-	char szEndOfResponseHeader[8];
-	char szResponseSuccessStatus[32];
-	char szContentLengthParamName[16];
-	char* pContentLength = NULL;
-	char* pEndOfContentLength = NULL;
-	DWORD dwOutputLength = 0;
-	DWORD dwOutputAllocLength = 0;
-	BYTE* pOutputBuffer = NULL;
-	BYTE* pNewOutputBuffer = NULL;
-	BYTE bCurrByte = 0;
-
-	// ensure url starts with 'http://'
-	memset(szProtocol, 0, sizeof(szProtocol));
-	strncpy(szProtocol, "http://", sizeof(szProtocol) - 1);
-	if (strncmp(pURL, szProtocol, strlen(szProtocol)) != 0)
-	{
-		// error
-		printf("Error: Invalid protocol\n");
-
-		return 1;
-	}
-
-	// copy host name
-	pStartOfHostName = pURL;
-	pStartOfHostName += strlen(szProtocol);
-	memset(szHostName, 0, sizeof(szHostName));
-	strncpy(szHostName, pStartOfHostName, sizeof(szHostName) - 1);
-
-	// remove request path from host name
-	pEndOfHostName = strstr(szHostName, "/");
-	if (pEndOfHostName == NULL)
-	{
-		// error
-		printf("Error: Invalid URL\n");
-
-		return 1;
-	}
-	*pEndOfHostName = '\0';
-
-	// check if the host name contains a custom port number
-	pHostNamePort = strstr(szHostName, ":");
-	if (pHostNamePort == NULL)
-	{
-		// no port specified - use port 80
-		dwPort = 80;
-	}
-	else
-	{
-		// terminate string
-		*pHostNamePort = '\0';
-
-		// extract port number
-		pHostNamePort++;
-		dwPort = atoi(pHostNamePort);
-		if (dwPort == 0)
-		{
-			// error
-			printf("Error: Invalid URL\n");
-
-			return 1;
-		}
-	}
-
-	// get start of request path
-	pRequestPath = pStartOfHostName;
-	pRequestPath += strlen(szHostName);
-
-	// check if the host name is a valid ipv4 address
-	memset(szResolvedIP, 0, sizeof(szResolvedIP));
-	if (NTSockets_ConvertIP(szHostName, &dwAddr) != 0)
-	{
-		// not ipv4 - try to resolve host using DNS
-		//if (DNSClient_Query("8.8.8.8", szHostName, szResolvedIP, sizeof(szResolvedIP) - 1) != 0)
-		//{
-			// error
-		//	printf("Error: Failed to resolve host name\n");
-
-		//	return 1;
-		//}
-	}
-	else
-	{
-		// copy original ip
-		strncpy(szResolvedIP, szHostName, sizeof(szResolvedIP) - 1);
-	}
-
-	// create socket handle
-	if (NTSockets_CreateTcpSocket(&SocketData) != 0)
-	{
-		// error
-		printf("Error: Failed to create TCP socket\n");
-
-		return 1;
-	}
-
-	// connect to server
-	if (NTSockets_Connect(&SocketData, szResolvedIP, (WORD)dwPort) != 0)
-	{
-		// error
-		printf("Error: Failed to connect to server\n");
-		NTSockets_CloseSocket(&SocketData);
-
-		return 1;
-	}
-
-	// send HTTP request
-	memset(szRequestHeader, 0, sizeof(szRequestHeader));
-	_snprintf(szRequestHeader, sizeof(szRequestHeader) - 1, "GET %s HTTP/1.0\r\nHost: %s\r\n\r\n", pRequestPath, szHostName);
-	if (NTSockets_Send(&SocketData, (BYTE*)szRequestHeader, strlen(szRequestHeader)) != 0)
-	{
-		// error
-		printf("Error: Failed to send data to server\n");
-		NTSockets_CloseSocket(&SocketData);
-
-		return 1;
-	}
-
-	printf("Sent HTTP request:\n%s", szRequestHeader);
-
-	// get response header
-	memset(szEndOfResponseHeader, 0, sizeof(szEndOfResponseHeader));
-	strncpy(szEndOfResponseHeader, "\r\n\r\n", sizeof(szEndOfResponseHeader) - 1);
-	memset(szResponseHeader, 0, sizeof(szResponseHeader));
-	for (DWORD i = 0; i < sizeof(szResponseHeader) - 1; i++)
-	{
-		// get next byte
-		if (NTSockets_Recv(&SocketData, (BYTE*)&szResponseHeader[i], 1) != 0)
-		{
-			// error
-			printf("Error: Failed to read HTTP response header\n");
-			NTSockets_CloseSocket(&SocketData);
-
-			return 1;
-		}
-
-		// check if this is the end of the response header
-		if ((i + 1) >= strlen(szEndOfResponseHeader))
-		{
-			if (strncmp(&szResponseHeader[(i + 1) - strlen(szEndOfResponseHeader)], szEndOfResponseHeader, strlen(szEndOfResponseHeader)) == 0)
-			{
-				// found end of response header
-				dwFoundEndOfResponseHeader = 1;
-				break;
-			}
-		}
-	}
-
-	// ensure the end of the response header was found
-	if (dwFoundEndOfResponseHeader == 0)
-	{
-		// error
-		printf("Error: Failed to read HTTP response header\n");
-		NTSockets_CloseSocket(&SocketData);
-
-		return 1;
-	}
-
-	printf("Received HTTP response:\n%s", szResponseHeader);
-
-	// convert response header to upper-case (for the content-length value search below)
-	for (int i = 0; i < strlen(szResponseHeader); i++)
-	{
-		// convert to upper-case (for the content-length value search below)
-		szResponseHeader[i] = toupper(szResponseHeader[i]);
-	}
-
-	// check status code
-	memset(szResponseSuccessStatus, 0, sizeof(szResponseSuccessStatus));
-	strncpy(szResponseSuccessStatus, "HTTP/1.0 200 OK\r\n", sizeof(szResponseSuccessStatus) - 1);
-	if (strncmp(szResponseHeader, szResponseSuccessStatus, strlen(szResponseSuccessStatus)) != 0)
-	{
-		// error
-		printf("Error: Invalid response status code\n");
-		NTSockets_CloseSocket(&SocketData);
-
-		return 1;
-	}
-
-	// get content-length value
-	memset(szContentLengthParamName, 0, sizeof(szContentLengthParamName));
-	strncpy(szContentLengthParamName, "CONTENT-LENGTH: ", sizeof(szContentLengthParamName) - 1);
-	pContentLength = strstr(szResponseHeader, szContentLengthParamName);
-	if (pContentLength != NULL)
-	{
-		// content-length field exists
-		pContentLength += strlen(szContentLengthParamName);
-		pEndOfContentLength = strstr(pContentLength, "\r\n");
-		if (pEndOfContentLength == NULL)
-		{
-			// error
-			printf("Error: Invalid response header\n");
-			NTSockets_CloseSocket(&SocketData);
-
-			return 1;
-		}
-		*pEndOfContentLength = '\0';
-		dwOutputLength = atoi(pContentLength);
-
-		// process response data
-		if (dwOutputLength != 0)
-		{
-			// allocate output data
-			pOutputBuffer = (BYTE*)malloc(dwOutputLength);
-			if (pOutputBuffer == NULL)
-			{
-				// error
-				printf("Error: Failed to allocate memory\n");
-				NTSockets_CloseSocket(&SocketData);
-
-				return 1;
-			}
-
-			// read output data
-			if (NTSockets_Recv(&SocketData, pOutputBuffer, dwOutputLength) != 0)
-			{
-				// error
-				printf("Error: Failed to read HTTP response data\n");
-				NTSockets_CloseSocket(&SocketData);
-
-				return 1;
-			}
-		}
-	}
-	else
-	{
-		// no content-length field - read until socket closes
-		for (;;)
-		{
-			// read output data
-			if (NTSockets_Recv(&SocketData, &bCurrByte, 1) != 0)
-			{
-				// finished
-				break;
-			}
-
-			// check if the output buffer is large enough
-			if (dwOutputLength >= dwOutputAllocLength)
-			{
-				// reallocate output buffer - add 8kb
-				dwOutputAllocLength += 8192;
-				if (pOutputBuffer == NULL)
-				{
-					// first buffer
-					pOutputBuffer = (BYTE*)malloc(dwOutputAllocLength);
-					if (pOutputBuffer == NULL)
-					{
-						// error
-						printf("Error: Failed to allocate memory\n");
-						NTSockets_CloseSocket(&SocketData);
-
-						return 1;
-					}
-				}
-				else
-				{
-					// reallocate existing buffer
-					pNewOutputBuffer = (BYTE*)realloc(pOutputBuffer, dwOutputAllocLength);
-					if (pNewOutputBuffer == NULL)
-					{
-						// error
-						printf("Error: Failed to allocate memory\n");
-						NTSockets_CloseSocket(&SocketData);
-						free(pOutputBuffer);
-
-						return 1;
-					}
-
-					// update ptr
-					pOutputBuffer = pNewOutputBuffer;
-				}
-			}
-
-			// store current byte
-			*(BYTE*)(pOutputBuffer + dwOutputLength) = bCurrByte;
-			dwOutputLength++;
-		}
-	}
-
-	// close socket
-	NTSockets_CloseSocket(&SocketData);
-
-	// store data
-	*pOutput = pOutputBuffer;
-	*pdwOutputLength = dwOutputLength;
-
-	return 0;
-}
-
 int main(int argc, char* argv[])
 {
-	BYTE* pOutput = NULL;
-	DWORD dwLength = 0;
-	char* pURL = "http://142.250.67.14/";
-	HANDLE hOutputFile = NULL;
-	DWORD dwBytesWritten = 0;
-
 	// get NtDeviceIoControlFile function ptr
 	NtDeviceIoControlFile = (unsigned long(__stdcall*)(void*, void*, void*, void*, struct IO_STATUS_BLOCK*, unsigned long, void*, unsigned long, void*, unsigned long))GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtDeviceIoControlFile");
 	if (NtDeviceIoControlFile == NULL)
@@ -795,26 +481,41 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	printf("Downloading file: %s\n\n", pURL);
-
-	// download file
-	if (DownloadFile(pURL, &pOutput, &dwLength) != 0)
+	NTSockets_SocketDataStruct SocketData;
+	if (NTSockets_CreateTcpSocket(&SocketData) != 0)
 	{
-		printf("Failed to download file\n");
+		printf("Error: Failed to create TCP socket\n");
 		return 1;
 	}
 
-	printf("Downloaded %u bytes successfully\n\n", dwLength);
+	char* host = "142.250.67.14";
+	WORD port = 80;
 
-	printf("%s\n", pOutput);
-
-	if (dwLength != 0)
+	// connect to server
+	if (NTSockets_Connect(&SocketData, host, port) != 0)
 	{
-		// free buffer
-		free(pOutput);
+		// error
+		printf("Error: Failed to connect to server\n");
+		NTSockets_CloseSocket(&SocketData);
+
+		return 1;
 	}
 
-	printf("\nFinished\n");
+	char getRequest[] = "GET / HTTP/1.0\r\nHost: google.com\r\n\r\n";
 
+	if (NTSockets_Send(&SocketData, (BYTE*)getRequest, strlen(getRequest)) != 0)
+	{
+		// error
+		printf("Error: Failed to send data to server\n");
+		NTSockets_CloseSocket(&SocketData);
+
+		return 1;
+	}
+
+	char buf[5000] = { 0 };
+	DWORD ret = NTSockets_Recv(&SocketData, (BYTE*)&buf, sizeof(buf));
+	printf("%s\n", buf);
+
+	NTSockets_CloseSocket(&SocketData);
 	return 0;
 }
