@@ -21,14 +21,27 @@ struct NTSockets_SocketDataStruct
 typedef struct NTSockets_SocketDataStruct NTSockets_SocketDataStruct;
 
 // See https://github.com/reactos/reactos/blob/master/sdk/include/psdk/winternl.h
-typedef struct _IO_STATUS_BLOCK {
-	union {
-		NTSTATUS Status;
+//typedef struct _IO_STATUS_BLOCK {
+//	union {
+//		NTSTATUS Status;
+//		PVOID Pointer;
+//	};
+//
+//	ULONG_PTR Information;
+//} IO_STATUS_BLOCK, * PIO_STATUS_BLOCK;
+
+struct IO_STATUS_BLOCK
+{
+	union
+	{
+		DWORD Status;
 		PVOID Pointer;
 	};
 
-	ULONG_PTR Information;
-} IO_STATUS_BLOCK, * PIO_STATUS_BLOCK;
+	DWORD* Information;
+};
+
+typedef struct IO_STATUS_BLOCK IO_STATUS_BLOCK;
 
 struct UNICODE_STRING
 {
@@ -56,9 +69,9 @@ struct NTSockets_BindDataStruct
 
 struct NTSockets_ConnectDataStruct
 {
-	DWORD dwUnknown1;
-	DWORD dwUnknown2;
-	DWORD dwUnknown3;
+	DWORD_PTR  dwUnknown1;
+	DWORD_PTR  dwUnknown2;
+	DWORD_PTR  dwUnknown3;
 	struct sockaddr_in SockAddr;
 };
 
