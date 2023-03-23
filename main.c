@@ -89,18 +89,11 @@ struct NTSockets_SendRecvDataStruct
 	DWORD dwUnknown2;
 };
 
-
 DWORD(WINAPI* NtDeviceIoControlFile)(HANDLE FileHandle, HANDLE Event, VOID* ApcRoutine, PVOID ApcContext, struct IO_STATUS_BLOCK* IoStatusBlock, 
 	ULONG IoControlCode, PVOID InputBuffer, ULONG InputBufferLength, PVOID OutputBuffer, ULONG OutputBufferLength);
 
 DWORD(WINAPI* NtCreateFile)(PHANDLE FileHandle, ACCESS_MASK DesiredAccess, struct OBJECT_ATTRIBUTES* ObjectAttributes, 
 	struct IO_STATUS_BLOCK* IoStatusBlock, LARGE_INTEGER* AllocationSize, ULONG FileAttributes, ULONG ShareAccess, ULONG CreateDisposition, ULONG CreateOptions, PVOID EaBuffer, ULONG EaLength);
-
-
-WORD my_htons(WORD x)
-{
-	return _byteswap_ushort(x);
-}
 
 DWORD NTSockets_CreateTcpSocket(struct NTSockets_SocketDataStruct* pSocketData)
 {
@@ -204,126 +197,10 @@ DWORD NTSockets_SocketDriverMsg(NTSockets_SocketDataStruct* pSocketData, DWORD d
 	return 0;
 }
 
-DWORD NTSockets_ConvertIP(char* pIP, DWORD* pdwAddr)
-{
-	char szCurrOctet[8];
-	DWORD dwCurrOctetIndex = 0;
-	DWORD dwCompletedOctetCount = 0;
-	char* pCurrByte = NULL;
-	DWORD dwEndOfOctet = 0;
-	DWORD dwEndOfString = 0;
-	DWORD dwOctet = 0;
-	BYTE bOctets[4];
-	DWORD dwAddr = 0;
-
-	// read IP string
-	memset(szCurrOctet, 0, sizeof(szCurrOctet));
-	dwCurrOctetIndex = 0;
-	pCurrByte = pIP;
-	for (;;)
-	{
-		// process current character
-		dwEndOfOctet = 0;
-		if (*pCurrByte == '\0')
-		{
-			// end of string
-			dwEndOfOctet = 1;
-			dwEndOfString = 1;
-		}
-		else if (*pCurrByte == '.')
-		{
-			// end of octet
-			dwEndOfOctet = 1;
-		}
-		else
-		{
-			// ensure this character is a number
-			if (*pCurrByte >= '0' && *pCurrByte <= '9')
-			{
-				if (dwCurrOctetIndex > 2)
-				{
-					// invalid ip
-					return 1;
-				}
-
-				// store current character
-				szCurrOctet[dwCurrOctetIndex] = *pCurrByte;
-				dwCurrOctetIndex++;
-			}
-			else
-			{
-				// invalid ip
-				return 1;
-			}
-		}
-
-		// check if the current octet is complete
-		if (dwEndOfOctet != 0)
-		{
-			if (dwCurrOctetIndex == 0)
-			{
-				// invalid ip
-				return 1;
-			}
-
-			// convert octet string to integer
-			dwOctet = atoi(szCurrOctet);
-			if (dwOctet > 255)
-			{
-				// invalid ip
-				return 1;
-			}
-
-			// already read 4 octets
-			if (dwCompletedOctetCount >= 4)
-			{
-				// invalid ip
-				return 1;
-			}
-
-			// store current octet
-			bOctets[dwCompletedOctetCount] = (BYTE)dwOctet;
-
-			// current octet complete
-			dwCompletedOctetCount++;
-
-			if (dwEndOfString != 0)
-			{
-				// end of string
-				break;
-			}
-
-			// reset szCurrOctet string
-			memset(szCurrOctet, 0, sizeof(szCurrOctet));
-			dwCurrOctetIndex = 0;
-		}
-
-		// move to the next character
-		pCurrByte++;
-	}
-
-	// ensure 4 octets were found
-	if (dwCompletedOctetCount != 4)
-	{
-		// invalid string
-		return 1;
-	}
-
-	// store octets in dword value
-	memcpy((void*)&dwAddr, bOctets, 4);
-
-	// store value
-	*pdwAddr = dwAddr;
-
-	return 0;
-}
-
-DWORD NTSockets_Connect(NTSockets_SocketDataStruct* pSocketData, char* pIP, WORD wPort)
+DWORD NTSockets_Connect(NTSockets_SocketDataStruct* pSocketData, DWORD dwConnectAddr, WORD wConnectPort)
 {
 	struct NTSockets_BindDataStruct NTSockets_BindData;
 	struct NTSockets_ConnectDataStruct NTSockets_ConnectData;
-	WORD wConnectPort = 0;
-	DWORD dwConnectAddr = 0;
 
 	// bind to local port
 	memset((void*)&NTSockets_BindData, 0, sizeof(NTSockets_BindData));
@@ -336,17 +213,6 @@ DWORD NTSockets_Connect(NTSockets_SocketDataStruct* pSocketData, char* pIP, WORD
 		// error
 		return 1;
 	}
-
-	// read connection ip
-	if (NTSockets_ConvertIP(pIP, &dwConnectAddr) != 0)
-	{
-		// error
-		return 1;
-	}
-
-	// use network byte order for connection port
-	// wConnectPort = NTSockets_Swap16BitByteOrder(wPort);
-	wConnectPort = my_htons(wPort);
 
 	// connect to remote port
 	memset((void*)&NTSockets_ConnectData, 0, sizeof(NTSockets_ConnectData));
@@ -501,8 +367,11 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	char* host = "142.250.67.14";
-	WORD port = 80;
+	// 142.250.67.14 in big-endian (network byte order)
+	DWORD host = _byteswap_ulong(0x8efa430e);
+
+	// 80 in big-endian (network byte order)
+	WORD port = _byteswap_ushort(80); 
 
 	// connect to server
 	if (NTSockets_Connect(&SocketData, host, port) != 0)
