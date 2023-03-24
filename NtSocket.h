@@ -124,10 +124,9 @@ private:
 	}
 public:
 	NtSocket() {
-		IO_STATUS_BLOCK IoStatusBlock;
-		struct OBJECT_ATTRIBUTES ObjectAttributes = { 0 };
+		IO_STATUS_BLOCK IoStatusBlock = { 0 };
+		OBJECT_ATTRIBUTES ObjectAttributes = { 0 };
 		UNICODE_STRING ObjectFilePath = { 0 };
-		DWORD dwStatus = 0;
 		BYTE bExtendedAttributes[] =
 		{
 			0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x1E, 0x00, 0x41, 0x66, 0x64, 0x4F, 0x70, 0x65, 0x6E, 0x50,
@@ -137,8 +136,8 @@ public:
 		};
 
 		// create status event
-		hStatusEvent = CreateEvent(NULL, 0, 0, NULL);
-		if (hStatusEvent == NULL)
+		hStatusEvent = CreateEventW(NULL, 0, 0, NULL);
+		if (hStatusEvent == nullptr)
 		{
 			// error
 			return;
@@ -155,9 +154,7 @@ public:
 		ObjectAttributes.Attributes = 0x40;
 
 		// create socket handle
-		IoStatusBlock.Status = 0;
-		IoStatusBlock.Information = NULL;
-		dwStatus = NtCreateFile(&hSocket, 0xC0140000, &ObjectAttributes, &IoStatusBlock, NULL, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, 1, 0, bExtendedAttributes, sizeof(bExtendedAttributes));
+		DWORD dwStatus = NtCreateFile(&hSocket, 0xC0140000, &ObjectAttributes, &IoStatusBlock, NULL, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, 1, 0, bExtendedAttributes, sizeof(bExtendedAttributes));
 		if (dwStatus != 0)
 		{
 			// error
@@ -175,6 +172,8 @@ public:
 		}
 	}
 
+	// The connect function establishes a connection to the specified dwConnectAddr and wConnectPort.
+	// Returns 0 on success and 1 if an error occurs.
 	DWORD Connect(DWORD dwConnectAddr, WORD wConnectPort)
 	{
 		dwConnectAddr = _byteswap_ulong(dwConnectAddr);
@@ -207,48 +206,42 @@ public:
 		return 0;
 	}
 
-	DWORD Send(BYTE* pData, ULONG dwLength)
+	DWORD Send(BYTE* pData, DWORD dwLength)
 	{
-		struct NTSockets_SendRecvDataStruct NTSockets_SendRecvData;
-		struct NTSockets_DataBufferStruct NTSockets_DataBuffer;
+		NTSockets_SendRecvDataStruct NTSockets_SendRecvData = { 0 };
+		NTSockets_DataBufferStruct NTSockets_DataBuffer = { 0 };
 		DWORD dwBytesSent = 0;
-		BYTE* pCurrSendPtr = NULL;
-		DWORD dwBytesRemaining = 0;
 
-		// set initial values
-		pCurrSendPtr = pData;
-		dwBytesRemaining = dwLength;
+		// set data buffer values
+		NTSockets_DataBuffer.dwDataLength = dwLength;
+		NTSockets_DataBuffer.pData = pData;
+
+		// send current block
+		NTSockets_SendRecvData.pBufferList = &NTSockets_DataBuffer;
+		NTSockets_SendRecvData.dwBufferCount = 1;
+
+		if (SocketDriverMsg(0x0001201F, (BYTE*)&NTSockets_SendRecvData, sizeof(NTSockets_SendRecvData), &dwBytesSent) != 0)
+		{
+			// error
+			return 0;
+		}
+		return dwBytesSent;
+	}
+
+	DWORD SendAll(BYTE* pData, DWORD dwLength) 
+	{
+		BYTE* pCurrSendPtr = pData;
+		DWORD dwBytesRemaining = dwLength;
 
 		// send data
-		for (;;)
+		while (dwBytesRemaining > 0)
 		{
-			if (dwBytesRemaining == 0)
-			{
-				// finished
-				break;
-			}
-
-			// set data buffer values
-			memset((void*)&NTSockets_DataBuffer, 0, sizeof(NTSockets_DataBuffer));
-			NTSockets_DataBuffer.dwDataLength = dwBytesRemaining;
-			NTSockets_DataBuffer.pData = pCurrSendPtr;
-
-			// send current block
-			memset((void*)&NTSockets_SendRecvData, 0, sizeof(NTSockets_SendRecvData));
-			NTSockets_SendRecvData.pBufferList = &NTSockets_DataBuffer;
-			NTSockets_SendRecvData.dwBufferCount = 1;
-			NTSockets_SendRecvData.dwUnknown1 = 0;
-			NTSockets_SendRecvData.dwUnknown2 = 0;
-			if (SocketDriverMsg(0x0001201F, (BYTE*)&NTSockets_SendRecvData, sizeof(NTSockets_SendRecvData), &dwBytesSent) != 0)
-			{
-				// error
-				return 1;
-			}
+			DWORD dwBytesSent = Send(pCurrSendPtr, dwBytesRemaining);
 
 			if (dwBytesSent == 0)
 			{
 				// socket disconnected
-				return 1;
+				return dwLength - dwBytesRemaining;
 			}
 
 			// update values
@@ -256,7 +249,7 @@ public:
 			dwBytesRemaining -= dwBytesSent;
 		}
 
-		return 0;
+		return dwLength;
 	}
 
 	// The Recv() function receives data from a connected socket.
@@ -286,17 +279,17 @@ public:
 		return dwBytesReceived;
 	}
 
-	// RecvFull() reads exactly dwLength bytes into pData.
+	// RecvAll() reads exactly dwLength bytes into pData.
 	// It returns the number of bytes received and an error is indicated if the return value != dwLength.
-	DWORD RecvFull(BYTE* pData, DWORD dwLength)
+	DWORD RecvAll(BYTE* pData, DWORD dwLength)
 	{
 		BYTE* pCurrRecvPtr = pData;
 		DWORD dwBytesRemaining = dwLength;
 
-		// send data
+		// Recv data
 		while (dwBytesRemaining > 0)
 		{
-			DWORD dwBytesReceived = this->Recv(pCurrRecvPtr, dwBytesRemaining);
+			DWORD dwBytesReceived = Recv(pCurrRecvPtr, dwBytesRemaining);
 
 			if (dwBytesReceived == 0)
 			{

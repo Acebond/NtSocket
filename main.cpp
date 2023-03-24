@@ -33,8 +33,8 @@ int main(int argc, char* argv[])
 	char getRequest[] = "GET / HTTP/1.0\r\nHost: google.com\r\n\r\n";
 
 	
-
-	if (socket.Send((BYTE*)getRequest, sizeof(getRequest)) != 0)
+	DWORD sent = socket.SendAll((BYTE*)getRequest, sizeof(getRequest));
+	if (sent != sizeof(getRequest))
 	{
 		// error
 		printf("Error: Failed to send data to server\n");
@@ -42,7 +42,7 @@ int main(int argc, char* argv[])
 	}
 
 	char buf[5000] = { 0 };
-	DWORD ret = socket.RecvFull((BYTE*)&buf, sizeof(buf));
+	DWORD read = socket.RecvAll((BYTE*)&buf, sizeof(buf));
 	printf("%s\n", buf);
 
 	return 0;
