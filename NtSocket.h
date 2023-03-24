@@ -261,7 +261,7 @@ public:
 
 	// The Recv() function receives data from a connected socket.
 	// If no error occurs, Recv() returns the number of bytes received and the buffer pointed to by the pData parameter will contain this data received.
-	// If the connection has been closed, the return value is zero.
+	// If the connection has been closed or an error occurs, the return value is zero.
 	DWORD Recv(BYTE* pData, DWORD dwLength)
 	{
 		NTSockets_SendRecvDataStruct NTSockets_SendRecvData = { 0 };
@@ -287,7 +287,7 @@ public:
 	}
 
 	// RecvFull() reads exactly dwLength bytes into pData.
-	// It returns the number of bytes copied into pData and an error is indicated if the return value != dwLength.
+	// It returns the number of bytes received and an error is indicated if the return value != dwLength.
 	DWORD RecvFull(BYTE* pData, DWORD dwLength)
 	{
 		BYTE* pCurrRecvPtr = pData;
@@ -309,6 +309,6 @@ public:
 			dwBytesRemaining -= dwBytesReceived;
 		}
 
-		return 0;
+		return dwLength;
 	}
 };
