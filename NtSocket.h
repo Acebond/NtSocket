@@ -76,6 +76,9 @@ struct NTSockets_SendRecvDataStruct
 	DWORD dwUnknown2;
 };
 
+class NtSocket;
+typedef DWORD (NtSocket::*SendRecvFunc)(BYTE*, DWORD);
+
 class NtSocket {
 private:
 	HANDLE hSocket = nullptr;
@@ -122,6 +125,30 @@ private:
 
 		return 0;
 	}
+
+	DWORD SendRecvAll(BYTE* pData, DWORD dwLength, SendRecvFunc funcSendRecv)
+	{
+		BYTE* pCurrDataPtr = pData;
+		DWORD dwBytesRemaining = dwLength;
+
+		while (dwBytesRemaining > 0)
+		{
+			DWORD dwBytesProcessed = (this->*funcSendRecv)(pCurrDataPtr, dwBytesRemaining);
+
+			if (dwBytesProcessed == 0)
+			{
+				// socket disconnected
+				return dwLength - dwBytesRemaining;
+			}
+
+			// update values
+			pCurrDataPtr += dwBytesProcessed;
+			dwBytesRemaining -= dwBytesProcessed;
+		}
+
+		return dwLength;
+	}
+
 public:
 	NtSocket() {
 		IO_STATUS_BLOCK IoStatusBlock = { 0 };
@@ -228,28 +255,11 @@ public:
 		return dwBytesSent;
 	}
 
+	// SendAll() sends exactly dwLength bytes from pData.
+	// It returns the number of bytes sent and an error is indicated if the return value != dwLength.
 	DWORD SendAll(BYTE* pData, DWORD dwLength) 
 	{
-		BYTE* pCurrSendPtr = pData;
-		DWORD dwBytesRemaining = dwLength;
-
-		// send data
-		while (dwBytesRemaining > 0)
-		{
-			DWORD dwBytesSent = Send(pCurrSendPtr, dwBytesRemaining);
-
-			if (dwBytesSent == 0)
-			{
-				// socket disconnected
-				return dwLength - dwBytesRemaining;
-			}
-
-			// update values
-			pCurrSendPtr += dwBytesSent;
-			dwBytesRemaining -= dwBytesSent;
-		}
-
-		return dwLength;
+		return SendRecvAll(pData, dwLength, &NtSocket::Send);
 	}
 
 	// The Recv() function receives data from a connected socket.
@@ -283,25 +293,6 @@ public:
 	// It returns the number of bytes received and an error is indicated if the return value != dwLength.
 	DWORD RecvAll(BYTE* pData, DWORD dwLength)
 	{
-		BYTE* pCurrRecvPtr = pData;
-		DWORD dwBytesRemaining = dwLength;
-
-		// Recv data
-		while (dwBytesRemaining > 0)
-		{
-			DWORD dwBytesReceived = Recv(pCurrRecvPtr, dwBytesRemaining);
-
-			if (dwBytesReceived == 0)
-			{
-				// socket disconnected
-				return dwLength - dwBytesRemaining;
-			}
-
-			// update values
-			pCurrRecvPtr += dwBytesReceived;
-			dwBytesRemaining -= dwBytesReceived;
-		}
-
-		return dwLength;
+		return SendRecvAll(pData, dwLength, &NtSocket::Recv);
 	}
 };
