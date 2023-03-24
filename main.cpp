@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include "NtSocket.h"
+#include "NtSocket.hpp"
 
 int main(int argc, char* argv[])
 {

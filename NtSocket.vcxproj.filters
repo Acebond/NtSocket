@@ -20,7 +20,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="NtSocket.h">
+    <ClInclude Include="NtSocket.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
