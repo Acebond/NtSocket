@@ -19,11 +19,8 @@ int main(int argc, char* argv[])
 
 	NtSocket socket;
 
-	// 142.250.67.14 in big-endian (network byte order)
-	DWORD host = _byteswap_ulong(0x8efa430e);
-
-	// 80 in big-endian (network byte order)
-	WORD port = _byteswap_ushort(80); 
+	DWORD host = 0x8efa430e;
+	WORD port = 80; 
 
 	// connect to server
 	if (socket.Connect(host, port) != 0)
@@ -37,7 +34,7 @@ int main(int argc, char* argv[])
 
 	
 
-	if (socket.Send((BYTE*)getRequest, strlen(getRequest)) != 0)
+	if (socket.Send((BYTE*)getRequest, sizeof(getRequest)) != 0)
 	{
 		// error
 		printf("Error: Failed to send data to server\n");
@@ -45,7 +42,7 @@ int main(int argc, char* argv[])
 	}
 
 	char buf[5000] = { 0 };
-	DWORD ret = socket.Recv((BYTE*)&buf, sizeof(buf));
+	DWORD ret = socket.RecvFull((BYTE*)&buf, sizeof(buf));
 	printf("%s\n", buf);
 
 	return 0;

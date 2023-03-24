@@ -19,29 +19,16 @@ DWORD(WINAPI* NtCreateFile)(PHANDLE FileHandle, ACCESS_MASK DesiredAccess, struc
 	struct IO_STATUS_BLOCK* IoStatusBlock, LARGE_INTEGER* AllocationSize, ULONG FileAttributes, ULONG ShareAccess, ULONG CreateDisposition, ULONG CreateOptions, PVOID EaBuffer, ULONG EaLength);
 
 
-
 // See https://github.com/reactos/reactos/blob/master/sdk/include/psdk/winternl.h
-//typedef struct _IO_STATUS_BLOCK {
-//	union {
-//		NTSTATUS Status;
-//		PVOID Pointer;
-//	};
-//
-//	ULONG_PTR Information;
-//} IO_STATUS_BLOCK, * PIO_STATUS_BLOCK;
-
 struct IO_STATUS_BLOCK
 {
 	union
 	{
-		DWORD Status;
+		NTSTATUS Status;
 		PVOID Pointer;
 	};
-
-	DWORD* Information;
+	ULONG Information;
 };
-
-typedef struct IO_STATUS_BLOCK IO_STATUS_BLOCK;
 
 struct UNICODE_STRING
 {
@@ -91,12 +78,12 @@ struct NTSockets_SendRecvDataStruct
 
 class NtSocket {
 private:
-	HANDLE hSocket = NULL;
-	HANDLE hStatusEvent = NULL;
+	HANDLE hSocket = nullptr;
+	HANDLE hStatusEvent = nullptr;
 
-	DWORD SocketDriverMsg(DWORD dwIoControlCode, BYTE* pData, DWORD dwLength, DWORD* pdwOutputInformation)
+	DWORD SocketDriverMsg(ULONG dwIoControlCode, BYTE* pData, ULONG dwLength, ULONG* pdwOutputInformation)
 	{
-		IO_STATUS_BLOCK IoStatusBlock;
+		IO_STATUS_BLOCK IoStatusBlock = { 0 };
 		DWORD dwStatus = 0;
 		BYTE bOutputBlock[0x10];
 
@@ -104,9 +91,9 @@ private:
 		ResetEvent(this->hStatusEvent);
 
 		// send device control request
-		IoStatusBlock.Status = 0;
-		IoStatusBlock.Information = NULL;
-		dwStatus = NtDeviceIoControlFile(this->hSocket, this->hStatusEvent, NULL, NULL, &IoStatusBlock, dwIoControlCode, (void*)pData, dwLength, bOutputBlock, sizeof(bOutputBlock));
+		dwStatus = NtDeviceIoControlFile(this->hSocket, this->hStatusEvent, NULL, NULL, 
+			&IoStatusBlock, dwIoControlCode, static_cast<PVOID>(pData), dwLength, bOutputBlock, sizeof(bOutputBlock));
+
 		if (dwStatus == STATUS_PENDING)
 		{
 			// response pending - wait for event
@@ -130,7 +117,7 @@ private:
 		if (pdwOutputInformation != NULL)
 		{
 			// store output info
-			*pdwOutputInformation = (DWORD)IoStatusBlock.Information;
+			*pdwOutputInformation = IoStatusBlock.Information;
 		}
 
 		return 0;
@@ -138,8 +125,8 @@ private:
 public:
 	NtSocket() {
 		IO_STATUS_BLOCK IoStatusBlock;
-		struct OBJECT_ATTRIBUTES ObjectAttributes;
-		struct UNICODE_STRING ObjectFilePath;
+		struct OBJECT_ATTRIBUTES ObjectAttributes = { 0 };
+		UNICODE_STRING ObjectFilePath = { 0 };
 		DWORD dwStatus = 0;
 		BYTE bExtendedAttributes[] =
 		{
@@ -154,17 +141,15 @@ public:
 		if (hStatusEvent == NULL)
 		{
 			// error
-			// return 1;
+			return;
 		}
 
 		// set afd endpoint path
-		memset((void*)&ObjectFilePath, 0, sizeof(ObjectFilePath));
 		ObjectFilePath.Buffer = const_cast<PWSTR>(L"\\Device\\Afd\\Endpoint");
-		ObjectFilePath.Length = wcslen(ObjectFilePath.Buffer) * sizeof(wchar_t);
+		ObjectFilePath.Length = static_cast<USHORT>(wcslen(ObjectFilePath.Buffer) * sizeof(wchar_t));
 		ObjectFilePath.MaximumLength = ObjectFilePath.Length;
 
 		// initialise object attributes
-		memset((void*)&ObjectAttributes, 0, sizeof(ObjectAttributes));
 		ObjectAttributes.Length = sizeof(ObjectAttributes);
 		ObjectAttributes.ObjectName = &ObjectFilePath;
 		ObjectAttributes.Attributes = 0x40;
@@ -177,32 +162,28 @@ public:
 		{
 			// error
 			CloseHandle(hStatusEvent);
-			//return 1;
+			return;
 		}
-
-		// initialise SocketData object
-		//memset((void*)&SocketData, 0, sizeof(SocketData));
-		//SocketData.hSocket = hSocket;
-		//SocketData.hStatusEvent = hEvent;
-
-		// store socket data
-		//memcpy((void*)pSocketData, (void*)&SocketData, sizeof(SocketData));
-
-		//return 0;
 	}
 
 	~NtSocket() {
-		CloseHandle(this->hSocket);
-		CloseHandle(this->hStatusEvent);
+		if (this->hSocket != nullptr) {
+			CloseHandle(this->hSocket);
+		}
+		if (this->hStatusEvent != nullptr) {
+			CloseHandle(this->hStatusEvent);
+		}
 	}
 
 	DWORD Connect(DWORD dwConnectAddr, WORD wConnectPort)
 	{
-		struct NTSockets_BindDataStruct NTSockets_BindData;
-		struct NTSockets_ConnectDataStruct NTSockets_ConnectData;
+		dwConnectAddr = _byteswap_ulong(dwConnectAddr);
+		wConnectPort = _byteswap_ushort(wConnectPort);
+
+		NTSockets_BindDataStruct NTSockets_BindData = { 0 };
+		NTSockets_ConnectDataStruct NTSockets_ConnectData = { 0 };
 
 		// bind to local port
-		memset((void*)&NTSockets_BindData, 0, sizeof(NTSockets_BindData));
 		NTSockets_BindData.dwUnknown1 = 2;
 		NTSockets_BindData.SockAddr.sin_family = AF_INET;
 		NTSockets_BindData.SockAddr.sin_addr.s_addr = INADDR_ANY;
@@ -214,10 +195,6 @@ public:
 		}
 
 		// connect to remote port
-		memset((void*)&NTSockets_ConnectData, 0, sizeof(NTSockets_ConnectData));
-		NTSockets_ConnectData.dwUnknown1 = 0;
-		NTSockets_ConnectData.dwUnknown2 = 0;
-		NTSockets_ConnectData.dwUnknown3 = 0;
 		NTSockets_ConnectData.SockAddr.sin_family = AF_INET;
 		NTSockets_ConnectData.SockAddr.sin_addr.s_addr = dwConnectAddr;
 		NTSockets_ConnectData.SockAddr.sin_port = wConnectPort;
@@ -230,7 +207,7 @@ public:
 		return 0;
 	}
 
-	DWORD Send(BYTE* pData, DWORD dwLength)
+	DWORD Send(BYTE* pData, ULONG dwLength)
 	{
 		struct NTSockets_SendRecvDataStruct NTSockets_SendRecvData;
 		struct NTSockets_DataBufferStruct NTSockets_DataBuffer;
@@ -282,48 +259,49 @@ public:
 		return 0;
 	}
 
+	// The Recv() function receives data from a connected socket.
+	// If no error occurs, Recv() returns the number of bytes received and the buffer pointed to by the pData parameter will contain this data received.
+	// If the connection has been closed, the return value is zero.
 	DWORD Recv(BYTE* pData, DWORD dwLength)
 	{
-		struct NTSockets_SendRecvDataStruct NTSockets_SendRecvData;
-		struct NTSockets_DataBufferStruct NTSockets_DataBuffer;
+		NTSockets_SendRecvDataStruct NTSockets_SendRecvData = { 0 };
+		NTSockets_DataBufferStruct NTSockets_DataBuffer = { 0 };
 		DWORD dwBytesReceived = 0;
-		BYTE* pCurrRecvPtr = NULL;
-		DWORD dwBytesRemaining = 0;
+		
+		// set data buffer values
+		NTSockets_DataBuffer.dwDataLength = dwLength;
+		NTSockets_DataBuffer.pData = pData;
 
-		// set initial values
-		pCurrRecvPtr = pData;
-		dwBytesRemaining = dwLength;
+		// recv current block
+		NTSockets_SendRecvData.pBufferList = &NTSockets_DataBuffer;
+		NTSockets_SendRecvData.dwBufferCount = 1;
+		NTSockets_SendRecvData.dwUnknown1 = 0;
+		NTSockets_SendRecvData.dwUnknown2 = 0x20;
+		if (SocketDriverMsg(0x00012017, (BYTE*)&NTSockets_SendRecvData, sizeof(NTSockets_SendRecvData), &dwBytesReceived) != 0)
+		{
+			// error
+			return 0;
+		}
+
+		return dwBytesReceived;
+	}
+
+	// RecvFull() reads exactly dwLength bytes into pData.
+	// It returns the number of bytes copied into pData and an error is indicated if the return value != dwLength.
+	DWORD RecvFull(BYTE* pData, DWORD dwLength)
+	{
+		BYTE* pCurrRecvPtr = pData;
+		DWORD dwBytesRemaining = dwLength;
 
 		// send data
-		for (;;)
+		while (dwBytesRemaining > 0)
 		{
-			if (dwBytesRemaining == 0)
-			{
-				// finished
-				break;
-			}
-
-			// set data buffer values
-			memset((void*)&NTSockets_DataBuffer, 0, sizeof(NTSockets_DataBuffer));
-			NTSockets_DataBuffer.dwDataLength = dwBytesRemaining;
-			NTSockets_DataBuffer.pData = pCurrRecvPtr;
-
-			// recv current block
-			memset((void*)&NTSockets_SendRecvData, 0, sizeof(NTSockets_SendRecvData));
-			NTSockets_SendRecvData.pBufferList = &NTSockets_DataBuffer;
-			NTSockets_SendRecvData.dwBufferCount = 1;
-			NTSockets_SendRecvData.dwUnknown1 = 0;
-			NTSockets_SendRecvData.dwUnknown2 = 0x20;
-			if (SocketDriverMsg(0x00012017, (BYTE*)&NTSockets_SendRecvData, sizeof(NTSockets_SendRecvData), &dwBytesReceived) != 0)
-			{
-				// error
-				return 1;
-			}
+			DWORD dwBytesReceived = this->Recv(pCurrRecvPtr, dwBytesRemaining);
 
 			if (dwBytesReceived == 0)
 			{
 				// socket disconnected
-				return 1;
+				return dwLength - dwBytesRemaining;
 			}
 
 			// update values
@@ -333,6 +311,4 @@ public:
 
 		return 0;
 	}
-
-
 };
