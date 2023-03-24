@@ -11,7 +11,6 @@
 #define IOCTL_AFD_BIND _AFD_CONTROL_CODE(AFD_BIND, METHOD_NEITHER)
 #define IOCTL_AFD_CONNECT _AFD_CONTROL_CODE(AFD_CONNECT, METHOD_NEITHER)
 
-
 DWORD(WINAPI* NtDeviceIoControlFile)(HANDLE FileHandle, HANDLE Event, VOID* ApcRoutine, PVOID ApcContext, struct IO_STATUS_BLOCK* IoStatusBlock,
 	ULONG IoControlCode, PVOID InputBuffer, ULONG InputBufferLength, PVOID OutputBuffer, ULONG OutputBufferLength);
 
@@ -37,12 +36,11 @@ struct UNICODE_STRING
 	PWSTR Buffer;
 };
 
-
 struct OBJECT_ATTRIBUTES
 {
 	ULONG Length;
 	HANDLE RootDirectory;
-	struct UNICODE_STRING* ObjectName;
+	UNICODE_STRING* ObjectName;
 	ULONG Attributes;
 	PVOID SecurityDescriptor;
 	PVOID SecurityQualityOfService;
@@ -51,7 +49,7 @@ struct OBJECT_ATTRIBUTES
 struct NTSockets_BindDataStruct
 {
 	DWORD dwUnknown1;
-	struct sockaddr_in SockAddr;
+	sockaddr_in SockAddr;
 };
 
 struct NTSockets_ConnectDataStruct
@@ -59,7 +57,7 @@ struct NTSockets_ConnectDataStruct
 	DWORD_PTR  dwUnknown1;
 	DWORD_PTR  dwUnknown2;
 	DWORD_PTR  dwUnknown3;
-	struct sockaddr_in SockAddr;
+	sockaddr_in SockAddr;
 };
 
 struct NTSockets_DataBufferStruct
@@ -70,17 +68,16 @@ struct NTSockets_DataBufferStruct
 
 struct NTSockets_SendRecvDataStruct
 {
-	struct NTSockets_DataBufferStruct* pBufferList;
+	NTSockets_DataBufferStruct* pBufferList;
 	DWORD dwBufferCount;
 	DWORD dwUnknown1;
 	DWORD dwUnknown2;
 };
 
-class NtSocket;
-typedef DWORD (NtSocket::*SendRecvFunc)(BYTE*, DWORD);
-
 class NtSocket {
 private:
+	typedef DWORD(NtSocket::*SendRecvFunc)(BYTE*, DWORD);
+
 	HANDLE hSocket = nullptr;
 	HANDLE hStatusEvent = nullptr;
 
@@ -150,6 +147,7 @@ private:
 	}
 
 public:
+	// Create a IPv4 TCP socket using NtCreateFile.
 	NtSocket() {
 		IO_STATUS_BLOCK IoStatusBlock = { 0 };
 		OBJECT_ATTRIBUTES ObjectAttributes = { 0 };
@@ -233,6 +231,9 @@ public:
 		return 0;
 	}
 
+	// The Send() function sends data on a connected socket.
+	// If no error occurs, Send() returns the number of bytes sent from the pData parameter.
+	// If the connection has been closed or an error occurs, the return value is zero.
 	DWORD Send(BYTE* pData, DWORD dwLength)
 	{
 		NTSockets_SendRecvDataStruct NTSockets_SendRecvData = { 0 };
@@ -263,7 +264,7 @@ public:
 	}
 
 	// The Recv() function receives data from a connected socket.
-	// If no error occurs, Recv() returns the number of bytes received and the buffer pointed to by the pData parameter will contain this data received.
+	// If no error occurs, Recv() returns the number of bytes received into the pData parameter.
 	// If the connection has been closed or an error occurs, the return value is zero.
 	DWORD Recv(BYTE* pData, DWORD dwLength)
 	{
